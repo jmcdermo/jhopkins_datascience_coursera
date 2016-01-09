@@ -1,0 +1,169 @@
+---
+title: "US Storm Damage Analysis"
+output: html_document
+---
+
+## Synopsis
+
+Using the NOAA Storm Data set, we seek answers to the following two questions:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+1. Across the United States, which types of events have the greatest economic consequences?
+
+
+## Data Processing 
+
+The NOAA Storm Data was downloaded from [here](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) on July 26th, 2014 at 12:45PM ET.
+
+```{r data_load, cache=TRUE}
+setwd('C:\\Users\\jmcdermo\\Documents\\GitHub\\datasciencecoursera\\reproducible_research\\peer_two')
+if (file.exists('repdata-data-StormData.csv.bz2')) {
+  raw_data <- read.csv('repdata-data-StormData.csv.bz2')
+}
+
+# filter by STATE__; anything without a digit in that column is a blank row
+# or a comment
+raw_data <- raw_data[is.numeric(raw_data$STATE__),]
+```
+
+The fields relevant to this analysis are as follows:
+
+* BGN_DATE - date of occurence for plotting
+* EVTYPE - the type of storm/weather event
+* FATALITIES - number of deaths called
+* INJURIES - number of injuries called
+* PROPDMG - dollar value of damage to property
+* PROPDMGEXP - the units of the property damage; 'b,m,k,h' are billions, millions... other values ('+,-,?,0,1,2,...) are ignored
+* CROPDMG - dollar value of damage to crops
+* CROPDMGEXP - the units of the property damage; 'b,m,k,h' are billions, millions... other values ('0,2,?,...) are ignored
+
+We use the EXP fields from PROPDMG and CROPDMG to scale the damage dollar values to their actual value.
+
+```{r data_processing, cache=TRUE}
+# since we're caching the raw data; create a working copy
+data <- data.frame(raw_data)
+
+# scale the DMG fields by the units
+data <- within(data, {EVTYPE <- tolower(EVTYPE)
+                      BGN_DATE <- as.Date(BGN_DATE, "%m/%e/%Y 0:00:00")
+                      PROPDMGEXP <- tolower(PROPDMGEXP)
+                      PROPDMGSCALE <- 10 ^ sapply(PROPDMGEXP, switch, 
+                                                  h=2, k=3, m=6, b=9, 0)
+                      PROPVALUE <- PROPDMG * PROPDMGSCALE
+                      CROPDMGEXP <- tolower(CROPDMGEXP)
+                      CROPDMGSCALE <- 10 ^ sapply(CROPDMGEXP, switch, 
+                                                  h=2, k=3, m=6, b=9, 0)
+                      CROPVALUE <- CROPDMG * CROPDMGSCALE
+                      })
+
+# only keep the columns we're going to work with
+cols_to_keep = c('BGN_DATE', 'EVTYPE', 'CROPVALUE', 'PROPVALUE', 'INJURIES', 'FATALITIES')
+data <- data[cols_to_keep]
+```
+
+There is a high number of unique EVTYPEs in here; too many at this point to do a meaningful analysis.
+
+```{r}
+# how many unique EVTYPEs?
+length(unique(data$EVTYPE))
+```
+
+With this damage data, we want to start narrowing down and aggregating the EVTYPE fields to a more manageable number.  What follows is a few steps to remove EVTYPEs that do not contribute to the damage and human harm in a meaningful way.
+
+```{r find_damage}
+# start by stripping out events without damage or harm to persons
+# -- aggregate by EVTYPE
+damage_data <- subset(data, FATALITIES != 0 | INJURIES != 0 | PROPVALUE != 0 | CROPVALUE != 0)
+
+# how many unique EVTYPEs?
+length(unique(damage_data$EVTYPE))
+```
+
+## Exploration
+
+We would like to evaluate ways to combine the various EVTYPEs into single categories.  By looking at the top values in the two damage categories we notice that there are some keywords we can look for.
+
+To begin aggregate by event type.
+
+```{r aggregate}
+# aggregate
+require(plyr)
+damage_sum <- ddply(damage_data, .(EVTYPE), summarise,
+                    tot_fatalities = sum(FATALITIES),
+                    tot_injuries = sum(INJURIES),
+                    tot_propvalue = sum(PROPVALUE),
+                    tot_cropvalue = sum(CROPVALUE))
+damage_sum$tot_human <- damage_sum$tot_fatalities + damage_sum$tot_injuries
+damage_sum$tot_econ <- damage_sum$tot_propvalue + damage_sum$tot_cropvalue
+```
+
+### Human Effects
+```{r human_explore}
+head(damage_sum[with(damage_sum, order(-tot_human)), c('EVTYPE', 'tot_human', 'tot_fatalities', 'tot_injuries')], n=20)
+```
+
+### Economic Effects
+```{r econ_explore}
+head(damage_sum[with(damage_sum, order(-tot_econ)), c('EVTYPE', 'tot_econ', 'tot_propvalue', 'tot_cropvalue')], n=20)
+```
+
+Specifically, if we group data fields by those containing the following we should get a more accurate picture:
+
+### Exploratory Results
+
+***note that TSTM is shorthand for thunderstorm***
+
+* drought
+* hail
+* flood
+* fire
+* heat
+* hurricane
+* lightning
+* storm (or TSTM)
+* tornado
+* wind
+
+```{r group}
+group_keywords <- function(evtype) {
+  if (grepl('storm', evtype) || grepl('tstm', evtype)) { output <- 'storm' }
+  else if (grepl('tornado', evtype)) { output <- 'tornado' }
+  else if (grepl('hail', evtype)) { output <- 'hail' }
+  else if (grepl('flood', evtype)) { output <- 'flood' }
+  else if (grepl('hurricane', evtype)) { output <- 'hurricane' }
+  else if (grepl('drought', evtype)) { output <- 'drought' }
+  else if (grepl('heat', evtype)) { output <- 'heat' }
+  else if (grepl('fire', evtype)) { output <- 'fire' }
+  else if (grepl('wind', evtype)) { output <- 'wind' }
+  else if (grepl('lightning', evtype)) { output <- 'lightning' }
+  else { output <- 'other' }
+  output
+}
+damage_sum$keyword <- unlist(lapply(damage_sum$EVTYPE, group_keywords))
+
+keyword_sum <- ddply(damage_sum, .(keyword), summarise,
+                     tot_fatalities = sum(tot_fatalities),
+                     tot_injuries = sum(tot_injuries),
+                     tot_propvalue = sum(tot_propvalue),
+                     tot_cropvalue = sum(tot_cropvalue))
+keyword_sum$tot_human <- keyword_sum$tot_fatalities + keyword_sum$tot_injuries
+keyword_sum$tot_econ <- keyword_sum$tot_propvalue + keyword_sum$tot_cropvalue
+```
+
+## Results
+
+Now we take a look at the top 
+
+### Human Effects
+```{r human_results}
+human <- keyword_sum[with(keyword_sum, order(-tot_human)), c('keyword', 'tot_human', 'tot_fatalities', 'tot_injuries')]
+histogram()
+```
+
+### Economic Effects
+```{r econ_results}
+econ <- keyword_sum[with(keyword_sum, order(-tot_econ)), c('keyword', 'tot_econ', 'tot_propvalue', 'tot_cropvalue')]
+
+#histogram(econ)
+```
+

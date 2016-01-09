@@ -1,0 +1,1 @@
+data <- read.csv('C:\\Users\\jmcdermo\\Documents\\GitHub\\datasciencecoursera\\r_programming\\week_one\\hw1_data.csv')
